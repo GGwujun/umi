@@ -33,7 +33,7 @@ translateHelp: true
 
 服务端渲染，首先得有后端服务器（一般是 Node.js）才可以使用，如果我没有后端服务器，也想用在上面提到的两个场景，那么推荐使用**预渲染**。
 
-预渲染与服务端渲染唯一的不同点在于**渲染时机**，服务端渲染的时机是在用户访问时执行渲染（即**实时渲染**，数据一般是最新的），预渲染的时机是在项目构建时，当用户访问时，数据不是一定是最新的（如果数据没有实时性，则可以直接考虑预渲染）。
+预渲染与服务端渲染唯一的不同点在于**渲染时机**，服务端渲染的时机是在用户访问时执行渲染（即**实时渲染**，数据一般是最新的），预渲染的时机是在项目构建时，当用户访问时，数据不一定是最新的（如果数据没有实时性，则可以直接考虑预渲染）。
 
 预渲染（Pre Render）在构建时执行渲染，将渲染后的 HTML 片段生成静态 HTML 文件。无需使用 web 服务器实时动态编译 HTML，适用于**静态站点生成**。
 
@@ -343,6 +343,10 @@ app.use(async (req, res) => {
 }
 ```
 
+## 示例
+
+目前做了两个示例分别是基于[koa](https://github.com/umijs/umi/tree/master/examples/ssr-koa)和[egg](https://github.com/umijs/umi/tree/master/examples/ssr-with-eggjs)的，示例内置dva数据流和国际化解决方案，代码部分有注释，可参照进行个性化的修改。
+
 ## polyfill
 
 Umi 3 默认移除了 DOM/BOM 浏览器 API 在 Node.js 的 polyfill，如果应用确实需要 polyfill 一些浏览器对象，可以使用 `beforeRenderServer` 运行时事件 API 进行扩展
@@ -565,6 +569,10 @@ $ ANALYZE=1 umi build
 
 <img width="600" style="box-shadow: rgba(0, 0, 0, 0.15) 0px 3px 6px 0px;" src="https://user-images.githubusercontent.com/13595509/80446129-8b8ac700-8948-11ea-82a8-54d94501a672.png" />
 
+## 谁在使用？
+
+<code src="./ssrUsers.tsx" inline />
+
 ## FAQ
 
 ### window is not defined, document is not defined, navigator is not defined
@@ -605,6 +613,36 @@ export default () => {
   )
 }
 ```
+3.如果是第三方库可以通过 umi 提供的 `dynamic` 动态加载组件
+```
+import React from 'react';
+import { dynamic } from 'umi';
+const renderLoading = () => <p>组件动态加载中...</p>
+export default dynamic({
+    loader: async () => {
+        // 动态加载第三方组件
+        const { default: DynamicComponent } = await import(
+            /* webpackChunkName: "dynamic-component" */ 'dynamic-component'
+        );
+        return DynamicComponent;
+    },
+    loading: () => renderLoading(),
+});
+```
+避免ssr渲染时报 ` did not match.`警告，使用时候ssr应当渲染相同`loading`组件
+```
+import React from 'react';
+import { isBrowser } from 'umi';
+import DynamicComponent from 'DynamicComponent';
+export default () => {
+  if(isBrowser()) return <DynamicComponent />
+  return renderLoading()
+}
+```
+
+### Helmet 结合 stream 渲染无法显示 title
+
+因为 react-helmet 暂不支持 stream 渲染，如果使用 Helmet ，请使用 `mode: 'string'` 方式渲染。[nfl/react-helmet#322](https://github.com/nfl/react-helmet/issues/322)
 
 ### antd pro 怎样使用服务端渲染？
 

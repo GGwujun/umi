@@ -1,4 +1,9 @@
-import { IConfig, IBundlerConfigType, BundlerConfigType } from '@umijs/types';
+import {
+  IConfig,
+  IBundlerConfigType,
+  BundlerConfigType,
+  ICopy,
+} from '@umijs/types';
 import defaultWebpack from 'webpack';
 import Config from 'webpack-chain';
 import { join } from 'path';
@@ -36,11 +41,12 @@ export interface IOpts {
   targets?: any;
   browserslist?: any;
   bundleImplementor?: typeof defaultWebpack;
-  modifyBabelOpts?: (opts: object) => Promise<any>;
+  modifyBabelOpts?: (opts: object, args?: any) => Promise<any>;
   modifyBabelPresetOpts?: (opts: object) => Promise<any>;
   chainWebpack?: (webpackConfig: any, args: any) => Promise<any>;
   miniCSSExtractPluginPath?: string;
   miniCSSExtractPluginLoaderPath?: string;
+  __disableTerserForTest?: boolean;
 }
 
 export default async function getConfig(
@@ -164,18 +170,38 @@ export default async function getConfig(
     presetOpts,
   });
   if (modifyBabelOpts) {
-    babelOpts = await modifyBabelOpts(babelOpts);
+    babelOpts = await modifyBabelOpts(babelOpts, {
+      type,
+    });
   }
 
   // prettier-ignore
   webpackConfig.module
     .rule('js')
       .test(/\.(js|mjs|jsx|ts|tsx)$/)
-      .include.add(cwd).end()
+      .include.add([
+        cwd,
+        // import module out of cwd using APP_ROOT
+        // issue: https://github.com/umijs/umi/issues/5594
+        ...(process.env.APP_ROOT ? [process.cwd()] : [])
+      ]).end()
       .exclude.add(/node_modules/).end()
       .use('babel-loader')
         .loader(require.resolve('babel-loader'))
         .options(babelOpts);
+
+  // umi/dist/index.esm.js 走 babel 编译
+  // why? 极速模式下不打包 @umijs/runtime
+  if (process.env.UMI_DIR) {
+    // prettier-ignore
+    webpackConfig.module
+      .rule('js')
+        .test(/\.(js|mjs|jsx|ts|tsx)$/)
+        .include.add(join(process.env.UMI_DIR as string, 'dist', 'index.esm.js')).end()
+        .use('babel-loader')
+          .loader(require.resolve('babel-loader'))
+          .options(babelOpts);
+  }
 
   // prettier-ignore
   webpackConfig.module
@@ -190,7 +216,6 @@ export default async function getConfig(
   const rule = webpackConfig.module
     .rule('js-in-node_modules')
       .test(/\.(js|mjs)$/);
-
   const nodeModulesTransform = config.nodeModulesTransform || {
     type: 'all',
     exclude: [],
@@ -333,7 +358,7 @@ export default async function getConfig(
   ] as any);
 
   // progress
-  if (!isWebpack5 && process.env.PROGRESS !== 'none') {
+  if (process.env.PROGRESS !== 'none') {
     webpackConfig
       .plugin('progress')
       .use(require.resolve('webpackbar'), [
@@ -344,20 +369,34 @@ export default async function getConfig(
   }
 
   // copy
-  webpackConfig.plugin('copy').use(require.resolve('copy-webpack-plugin'), [
-    [
-      existsSync(join(cwd, 'public')) && {
-        from: join(cwd, 'public'),
-        to: absOutputPath,
+  const copyPatterns = [
+    existsSync(join(cwd, 'public')) && {
+      from: join(cwd, 'public'),
+      to: absOutputPath,
+    },
+    ...(config.copy
+      ? config.copy.map((item: ICopy | string) => {
+          if (typeof item === 'string') {
+            return {
+              from: join(cwd, item),
+              to: absOutputPath,
+            };
+          }
+          return {
+            from: join(cwd, item.from),
+            to: join(absOutputPath, item.to),
+          };
+        })
+      : []),
+  ].filter(Boolean);
+
+  if (copyPatterns.length) {
+    webpackConfig.plugin('copy').use(require.resolve('copy-webpack-plugin'), [
+      {
+        patterns: copyPatterns,
       },
-      ...(config.copy
-        ? config.copy.map((from) => ({
-            from: join(cwd, from),
-            to: absOutputPath,
-          }))
-        : []),
-    ].filter(Boolean),
-  ]);
+    ]);
+  }
 
   // timefix
   // webpackConfig
@@ -373,6 +412,23 @@ export default async function getConfig(
           clearConsole: false,
         },
       ]);
+  }
+
+  // profile
+  if (process.env.WEBPACK_PROFILE) {
+    webpackConfig.profile(true);
+    const statsInclude = ['verbose', 'normal', 'minimal'];
+    webpackConfig.stats(
+      (statsInclude.includes(process.env.WEBPACK_PROFILE)
+        ? process.env.WEBPACK_PROFILE
+        : 'verbose') as defaultWebpack.Options.Stats,
+    );
+    const StatsPlugin = require('stats-webpack-plugin');
+    webpackConfig.plugin('stats-webpack-plugin').use(
+      new StatsPlugin('stats.json', {
+        chunkModules: true,
+      }),
+    );
   }
 
   const enableManifest = () => {
@@ -423,7 +479,7 @@ export default async function getConfig(
       // compress
       if (disableCompress) {
         webpackConfig.optimization.minimize(false);
-      } else {
+      } else if (!opts.__disableTerserForTest) {
         webpackConfig.optimization
           .minimizer('terser')
           .use(require.resolve('terser-webpack-plugin'), [

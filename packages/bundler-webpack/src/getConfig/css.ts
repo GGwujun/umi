@@ -53,16 +53,17 @@ export function createCSSRule({
           ),
         );
     } else {
-      if (type === BundlerConfigType.csr) {
+      if (type === BundlerConfigType.csr && !config.styleLoader) {
         rule
           .use('extract-css-loader')
           .loader(
             miniCSSExtractPluginLoaderPath ||
-              require.resolve('mini-css-extract-plugin/dist/loader'),
+              require('mini-css-extract-plugin').loader,
           )
           .options({
             publicPath: './',
-            hmr: isDev,
+            // https://github.com/umijs/umi/issues/5801
+            esModule: false,
           });
       }
     }
@@ -110,10 +111,13 @@ export function createCSSRule({
               // https://github.com/csstools/postcss-preset-env
               require('postcss-preset-env')({
                 // TODO: set browsers
-                autoprefixer: {
-                  ...config.autoprefixer,
-                  overrideBrowserslist: browserslist,
-                },
+                autoprefixer:
+                  type === BundlerConfigType.ssr
+                    ? false
+                    : {
+                        ...config.autoprefixer,
+                        overrideBrowserslist: browserslist,
+                      },
                 // https://cssdb.org/
                 stage: 3,
               }),
